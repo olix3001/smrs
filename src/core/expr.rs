@@ -21,7 +21,9 @@ pub enum Expr {
     /// A power of one expression to another.
     Power(Box<Expr>, Box<Expr>),
     /// A negation of an expression. This is equivalent to multiplying the expression by -1.
-    Negation(Box<Expr>)
+    Negation(Box<Expr>),
+    /// Basically a parenthesis. This is used to group expressions together and to change the precedence of expressions.
+    Group(Box<Expr>)
 }
 
 impl Expr {
@@ -34,7 +36,8 @@ impl Expr {
             Expr::Sum(v) => v.iter().map(|e| e.to_plain_string()).collect::<Vec<_>>().join(" + "),
             Expr::Product(v) => v.iter().map(|e| e.to_plain_string()).collect::<Vec<_>>().join("*"),
             Expr::Power(b, e) => format!("{}^({})", b.to_plain_string(), e.to_plain_string()),
-            Expr::Negation(e) => format!("-({})", e.to_plain_string())
+            Expr::Negation(e) => format!("-({})", e.to_plain_string()),
+            Expr::Group(e) => format!("({})", e.to_plain_string())
         }
     }
 
@@ -47,6 +50,7 @@ impl Expr {
             Expr::Product(_) => 2,
             Expr::Power(_, _) => 3,
             Expr::Negation(_) => 4,
+            Expr::Group(_) => 5
         }
     }
 
@@ -84,7 +88,8 @@ impl Expr {
                 parts
             }
             Expr::Power(b, e) => vec![b, e], // Return the base and the exponent.
-            Expr::Negation(e) => e.parts() // Return the negated expression.
+            Expr::Negation(e) => vec![e], // Return the negated expression.
+            Expr::Group(e) => vec![e] // Return the grouped expression.
         }
     }
 
@@ -96,6 +101,7 @@ impl Expr {
             Expr::Product(_) => Expr::Product(owned_vec!(self.parts())),
             Expr::Power(b, e) => Expr::Power(Box::new(b.flatten()), Box::new(e.flatten())),
             Expr::Negation(e) => Expr::Negation(Box::new(e.flatten())),
+            Expr::Group(e) => Expr::Group(Box::new(e.flatten())),
             _ => self.clone()
         }
     }
@@ -117,7 +123,8 @@ impl Expr {
             Expr::Sum(_) => Expr::Sum(parts.iter().map(|e| e.clone().clone()).collect()),
             Expr::Product(_) => Expr::Product(parts.iter().map(|e| e.clone().clone()).collect()),
             Expr::Power(b, e) => Expr::Power(Box::new(b.replace_parts(parts)), Box::new(e.replace_parts(parts))),
-            Expr::Negation(e) => Expr::Negation(Box::new(e.replace_parts(parts)))
+            Expr::Negation(_e) => Expr::Negation(Box::new(parts[0].clone())),
+            Expr::Group(_e) => Expr::Group(Box::new(parts[0].clone()))
         }
     }
 
@@ -202,20 +209,20 @@ impl Expr {
     /// Gets coefficients of the expression. For example, `2x + 3y` becomes `[2, 3]`.
     /// This works only for the first level of the expression.
     pub fn coefficients(&self) -> Vec<BigRational> {
-        let coeffs: Vec<BigRational> = self.parts().iter().filter_map(|e| match e {
-            Expr::Product(v) => {
-                // If the element is a product, then get the coefficients.
-                let mut coefficients = Vec::new();
-                for e in v {
-                    match e {
-                        Expr::Number(n) => coefficients.push(n.clone()),
-                        _ => return None
-                    }
-                }
-                Some(coefficients.iter().fold(BigRational::from_integer(num::BigInt::from(1)), |a, b| a * b))
-            },
-            _ => None
-        }).collect(); // Collect the coefficients into a vector.
+        // Ensure we are working on a product.
+        if let Expr::Product(_) = self {
+            ()
+        } else {
+            return vec![BigRational::from_integer(num::BigInt::from(1))]; // If not, then return 1.
+        }
+        // Get coefficients from the expression.
+        let mut coeffs = Vec::new();
+        for e in self.parts() {
+            match e {
+                Expr::Number(n) => coeffs.push(n.clone()),
+                _ => coeffs.push(BigRational::from_integer(num::BigInt::from(1)))
+            }
+        }
 
         // If there are no coefficients, then return 1.
         if coeffs.len() == 0 {
@@ -237,7 +244,11 @@ impl Expr {
                         _ => parts.push(e.clone())
                     }
                 }
-                Expr::Product(parts)
+                if parts.len() == 1 {
+                    parts[0].clone()
+                } else {
+                    Expr::Product(parts)
+                }
             },
             _ => self.clone()
         }

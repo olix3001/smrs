@@ -16,6 +16,7 @@ pub fn combine_like_parts(expr: &Expr) -> Expr {
     // And ensure we are working on a sum.
     let expr = match expr {
         Expr::Sum(parts) => Expr::Sum(parts),
+        Expr::Number(_) | Expr::Variable(_) => return expr.clone(),
         _ => return expr.replace_parts(&expr.parts().iter().map(|e| combine_like_parts(e)).collect::<Vec<_>>())
     };
 
@@ -28,8 +29,12 @@ pub fn combine_like_parts(expr: &Expr) -> Expr {
                 }
             }
         }
+    
         e.clone().clone()
     }).collect::<Vec<_>>());
+
+    // Combine like terms in subexpressions.
+    let expr = expr.replace_parts(&expr.parts().iter().map(|e| combine_like_parts(e)).collect::<Vec<_>>());
 
     // First step: Combine like variables.
     let mut coeff_map: HashMap<Expr, Expr> = HashMap::new();
@@ -40,15 +45,25 @@ pub fn combine_like_parts(expr: &Expr) -> Expr {
         let coeffs = part.coefficients();
 
         // Combine the coefficients.
+        let mut main_coeff = num::BigRational::from_integer(num::BigInt::from(1));
         for coeff in coeffs {
-            if let Some(existing) = coeff_map.get_mut(&part.without_coefficients()) {
-                if existing.parts().len() == 0 { continue; } // We don't want to combine with a number.
-                if let Expr::Number(existing) = existing {
-                    *existing += coeff;
-                }
-            } else {
-                coeff_map.insert(part.without_coefficients(), Expr::Number(coeff));
+            main_coeff *= coeff;
+        }
+
+        // If the main coefficient is zero, skip this part.
+        if main_coeff == num::BigRational::from_integer(num::BigInt::from(0)) {
+            continue;
+        }
+
+        // Check if this term is already in the coefficient map.
+        if let Some(coeff) = coeff_map.get_mut(&part.without_coefficients()) {
+            // If it is, add the main coefficient to the existing coefficient.
+            if let Expr::Number(coeff) = coeff {
+                *coeff += main_coeff;
             }
+        } else {
+            // If it is not, add it to the coefficient map.
+            coeff_map.insert(part.without_coefficients(), Expr::Number(main_coeff));
         }
     }
 
@@ -75,8 +90,8 @@ pub fn combine_like_parts(expr: &Expr) -> Expr {
         new_expr.push(Expr::Number(num_sum));
     }
 
-    // Return the new sum.
-    Expr::Sum(new_expr)
+    // Return the new sum. This sum is already sorted.
+    Expr::Sum(new_expr).sort()
 }
 
 #[cfg(test)]
@@ -84,7 +99,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_combine_like_powers() {
+    fn test_combine_like_terms() {
         let expr = Expr::Sum(vec![
             Expr::Power(Box::new(Expr::Variable("x".to_string())), Box::new(Expr::from(2))),
             Expr::Power(Box::new(Expr::Variable("x".to_string())), Box::new(Expr::from(2))),
@@ -92,6 +107,82 @@ mod tests {
             Expr::from("x")
         ]);
 
-        panic!("P {:?}", combine_like_parts(&expr).to_plain_string());
+        assert_eq!(combine_like_parts(&expr), Expr::Sum(vec![
+            Expr::Product(vec![
+                Expr::Number(num::BigRational::from_integer(num::BigInt::from(2))),
+                Expr::Power(Box::new(Expr::Variable("x".to_string())), Box::new(Expr::from(2))),
+            ]),
+                Expr::Product(vec![
+                Expr::Number(num::BigRational::from_integer(num::BigInt::from(2))),
+                Expr::Variable("x".to_string()),
+            ])
+        ]));
+    }
+
+    #[test]
+    fn test_combine_like_terms_group() {
+        // Tests whether 2(x+y) + 3(x+y) becomes 5(x+y).
+        let expr = Expr::Sum(vec![
+            Expr::Product(vec![
+                Expr::Number(num::BigRational::from_integer(num::BigInt::from(2))),
+                Expr::Group(Box::new(
+                    Expr::Sum(vec![
+                        Expr::Variable("x".to_string()),
+                        Expr::Variable("y".to_string())
+                    ])
+                ))
+            ]),
+            Expr::Product(vec![
+                Expr::Number(num::BigRational::from_integer(num::BigInt::from(3))),
+                Expr::Group(Box::new(
+                    Expr::Sum(vec![
+                        Expr::Variable("x".to_string()),
+                        Expr::Variable("y".to_string())
+                    ])
+                ))
+            ])
+        ]);
+
+        assert_eq!(combine_like_parts(&expr), Expr::Sum(vec![
+            Expr::Product(vec![
+                Expr::Number(num::BigRational::from_integer(num::BigInt::from(5))),
+                Expr::Group(Box::new(
+                    Expr::Sum(vec![
+                        Expr::Variable("x".to_string()),
+                        Expr::Variable("y".to_string())
+                    ])
+                ))
+            ])
+        ]));
+    }
+
+    #[test]
+    fn test_nested_combine_like_terms() {
+        // Tests whether (x + 2x) + (2y + 4y) will become (3x) + (6y).
+        let expr = Expr::Sum(vec![
+            Expr::Group(Box::new(
+                Expr::Sum(vec![
+                    Expr::Variable("x".to_string()),
+                    Expr::Product(vec![
+                        Expr::Number(num::BigRational::from_integer(num::BigInt::from(2))),
+                        Expr::Variable("x".to_string())
+                    ])
+                ])
+            )),
+            Expr::Group(Box::new(
+                Expr::Sum(vec![
+                    Expr::Product(vec![
+                        Expr::Number(num::BigRational::from_integer(num::BigInt::from(2))),
+                        Expr::Variable("x".to_string())
+                    ]),
+                    Expr::Product(vec![
+                        Expr::Number(num::BigRational::from_integer(num::BigInt::from(4))),
+                        Expr::Variable("x".to_string())
+                    ])
+                ])
+            ))
+        ]);
+
+        panic!("{:?}", combine_like_parts(&expr).to_plain_string());
     }
 }
