@@ -1,6 +1,7 @@
 use self::expr::Expr;
 
 pub mod expr;
+pub mod simplify;
 
 // Utilities for easier use of the library.
 impl From<i32> for Expr {

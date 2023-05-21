@@ -110,7 +110,7 @@ impl Expr {
 
     /// Creates new expression from original expression with parts replaced.
     /// For example, `x + y` with [x, z] as new parts becomes `x + z`.
-    pub fn replace_parts(&self, parts: &[&Expr]) -> Expr {
+    pub fn replace_parts(&self, parts: &[Expr]) -> Expr {
         match self {
             Expr::Number(_) => self.clone(),
             Expr::Variable(_) => self.clone(),
@@ -191,7 +191,56 @@ impl Expr {
         });
 
         // Create new expression with sorted parts.
-        flattened.replace_parts(&parts)
+        flattened.replace_parts(&owned_vec!(parts))
+    }
+
+    // Applies all sortings to the expression.
+    pub fn sort(&self) -> Expr {
+        self.sort_variables().sort_powers()
+    }
+
+    /// Gets coefficients of the expression. For example, `2x + 3y` becomes `[2, 3]`.
+    /// This works only for the first level of the expression.
+    pub fn coefficients(&self) -> Vec<BigRational> {
+        let coeffs: Vec<BigRational> = self.parts().iter().filter_map(|e| match e {
+            Expr::Product(v) => {
+                // If the element is a product, then get the coefficients.
+                let mut coefficients = Vec::new();
+                for e in v {
+                    match e {
+                        Expr::Number(n) => coefficients.push(n.clone()),
+                        _ => return None
+                    }
+                }
+                Some(coefficients.iter().fold(BigRational::from_integer(num::BigInt::from(1)), |a, b| a * b))
+            },
+            _ => None
+        }).collect(); // Collect the coefficients into a vector.
+
+        // If there are no coefficients, then return 1.
+        if coeffs.len() == 0 {
+            vec![BigRational::from_integer(num::BigInt::from(1))]
+        } else {
+            coeffs
+        }
+    }
+
+    /// Removes coefficients from the expression. For example, `2x` becomes `x`.
+    /// This only removes coefficients from the first level of the expression.
+    pub fn without_coefficients(&self) -> Expr {
+        match self {
+            Expr::Product(v) => {
+                let mut parts = Vec::new();
+                for e in v {
+                    match e {
+                        Expr::Number(_) => (),
+                        _ => parts.push(e.clone())
+                    }
+                }
+                Expr::Product(parts)
+            },
+            _ => self.clone()
+        }
     }
 }
 
