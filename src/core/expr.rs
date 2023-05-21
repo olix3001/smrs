@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use num::BigRational;
 
 use crate::owned_vec;
@@ -106,6 +108,19 @@ impl Expr {
         }).collect()
     }
 
+    /// Creates new expression from original expression with parts replaced.
+    /// For example, `x + y` with [x, z] as new parts becomes `x + z`.
+    pub fn replace_parts(&self, parts: &[&Expr]) -> Expr {
+        match self {
+            Expr::Number(_) => self.clone(),
+            Expr::Variable(_) => self.clone(),
+            Expr::Sum(_) => Expr::Sum(parts.iter().map(|e| e.clone().clone()).collect()),
+            Expr::Product(_) => Expr::Product(parts.iter().map(|e| e.clone().clone()).collect()),
+            Expr::Power(b, e) => Expr::Power(Box::new(b.replace_parts(parts)), Box::new(e.replace_parts(parts))),
+            Expr::Negation(e) => Expr::Negation(Box::new(e.replace_parts(parts)))
+        }
+    }
+
     /// Sorts an expression, for example, `y + x` becomes `x + y`.
     /// The sorting is done by comparing variables alphabetically, and numbers by their value.
     /// This is done recursively and flattens the expression so `y + (x + z)` becomes `x + y + z`.
@@ -121,8 +136,8 @@ impl Expr {
                 v.sort_by(|a, b| {
                     match (a, b) {
                         (Expr::Number(n1), Expr::Number(n2)) => n1.cmp(&n2),
-                        (Expr::Number(_), _) => std::cmp::Ordering::Less, // Number is always less than variable.
-                        (_, Expr::Number(_)) => std::cmp::Ordering::Greater, // Variable is always greater than number.
+                        (Expr::Number(_), _) => std::cmp::Ordering::Greater, // Number is always greater than variable.
+                        (_, Expr::Number(_)) => std::cmp::Ordering::Less, // Variable is always less than number.
                         _ => std::cmp::Ordering::Equal // Otherwise, they are equal.
                     }
                 });
@@ -139,8 +154,8 @@ impl Expr {
                 v.sort_by(|a, b| {
                     match (a, b) {
                         (Expr::Number(n1), Expr::Number(n2)) => n1.cmp(&n2),
-                        (Expr::Number(_), _) => std::cmp::Ordering::Less, // Number is always less than variable.
-                        (_, Expr::Number(_)) => std::cmp::Ordering::Greater, // Variable is always greater than number.
+                        (Expr::Number(_), _) => std::cmp::Ordering::Greater, // Number is always greater than variable.
+                        (_, Expr::Number(_)) => std::cmp::Ordering::Less, // Variable is always less than number.
                         _ => std::cmp::Ordering::Equal // Otherwise, they are equal.
                     }
                 });
@@ -150,6 +165,33 @@ impl Expr {
         };
 
         sorted_expr
+    }
+
+    /// Sorts the powers of the expression. For example, `x^2 + x^3` becomes `x^3 + x^2`.
+    /// This can only sort if exponent is a number.
+    pub fn sort_powers(&self) -> Expr {
+        let flattened = self.flatten();
+        let mut parts = flattened.parts();
+
+        // Sort the powers.
+        parts.sort_by(|a, b| {
+            match (a, b) {
+                (Expr::Power(b1, e1), Expr::Power(b2, e2)) => {
+                    // Check whether the base is the same.
+                    if b1 != b2 {
+                        return std::cmp::Ordering::Equal;
+                    }
+                    match (e1.as_ref(), e2.as_ref()) {
+                        (Expr::Number(n1), Expr::Number(n2)) => n1.cmp(&n2).reverse(),
+                        _ => std::cmp::Ordering::Equal
+                    }
+                },
+                _ => std::cmp::Ordering::Equal
+            }  
+        });
+
+        // Create new expression with sorted parts.
+        flattened.replace_parts(&parts)
     }
 }
 
@@ -181,19 +223,30 @@ mod test {
     fn test_expr_sort_variables() {
         // First test product.
         let expr = Expr::Product(vec![Expr::from(1), Expr::from("x"), Expr::from(3)]);
-        assert_eq!(expr.sort_variables(), Expr::Product(vec![Expr::from(1), Expr::from(3), Expr::from("x")]));
+        assert_eq!(expr.sort_variables(), Expr::Product(vec![Expr::from("x"), Expr::from(1), Expr::from(3)]));
 
         // Then test sum.
         let expr = Expr::Sum(vec![Expr::from(1), Expr::from("x"), Expr::from(3)]);
-        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::from(1), Expr::from(3), Expr::from("x")]));
+        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::from("x"), Expr::from(1), Expr::from(3)]));
 
         // Test more complex expression of just sum.
         let expr = Expr::Sum(vec![Expr::from(1), Expr::from("x"), Expr::from(3), Expr::from("y"), Expr::from(2), Expr::from("z")]);
-        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::from(1), Expr::from(2), Expr::from(3), Expr::from("x"), Expr::from("y"), Expr::from("z")]));
+        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::from("x"), Expr::from("y"), Expr::from("z"), Expr::from(1), Expr::from(2), Expr::from(3)]));
 
         // Test expression with both sum and product.
-        // This expression is 1 + 2y + 3x + 6, which should be 1 + 6 + 3x + 2y.
+        // This expression is 1 + 2y + 3x + 6, which should be 3x + 2y + 1 + 6.
         let expr = Expr::Sum(vec![Expr::from(1), Expr::Product(vec![Expr::from(2), Expr::from("y")]), Expr::Product(vec![Expr::from(3), Expr::from("x")]), Expr::from(6)]);
-        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::from(1), Expr::from(6), Expr::Product(vec![Expr::from(3), Expr::from("x")]), Expr::Product(vec![Expr::from(2), Expr::from("y")])]));
+        assert_eq!(expr.sort_variables(), Expr::Sum(vec![Expr::Product(vec![Expr::from(3), Expr::from("x")]), Expr::Product(vec![Expr::from(2), Expr::from("y")]), Expr::from(1), Expr::from(6)]));
+    }
+
+    #[test]
+    pub fn test_expr_sort_powers() {
+        // x^2 + x^3 should become x^3 + x^2.
+        let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3)))]);
+        assert_eq!(expr.sort_powers(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2)))]));
+    
+        // x^2 + y^3 + x^3 should become x^3 + x^2 + y^3.
+        let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3)))]);
+        assert_eq!(expr.sort_variables().sort_powers(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3)))]));
     }
 }
