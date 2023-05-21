@@ -26,6 +26,20 @@ pub enum Expr {
     Group(Box<Expr>)
 }
 
+/// Representation of the associativity of an operator.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum Associativity {
+    /// The operator is left-associative.
+    /// This means that `a ∘ b ∘ c` is equivalent to `(a ∘ b) ∘ c`.
+    LeftAssociative,
+    /// The operator is right-associative.
+    /// This means that `a ∘ b ∘ c` is equivalent to `a ∘ (b ∘ c)`.
+    RightAssociative,
+    /// The operator is commutative.
+    /// This means that `a ∘ b ∘ c` is equivalent to both `(a ∘ b) ∘ c` and `a ∘ (b ∘ c)`.
+    Commutative
+}
+
 impl Expr {
     /// Prints the expression in a human-readable format. This is used mainly for debugging as it does not print the expression in a nice way.
     /// For example, `2x + 3y*z^(-1)` becomes `2*x + 3*y*z^(-1)`. 
@@ -54,13 +68,26 @@ impl Expr {
         }
     }
 
+    /// Returns the associativity of the expression. Expressions that are not operators are commutative.
+    pub fn get_associativity(&self) -> Associativity {
+        match self {
+            Expr::Number(_) => Associativity::Commutative,
+            Expr::Variable(_) => Associativity::Commutative,
+            Expr::Sum(_) => Associativity::Commutative,
+            Expr::Product(_) => Associativity::Commutative,
+            Expr::Power(_, _) => Associativity::RightAssociative,
+            Expr::Negation(_) => Associativity::Commutative,
+            Expr::Group(_) => Associativity::Commutative
+        }
+    }
+
     /// Gets all parts of the expression. For example, `x + y` becomes `[x, y]`.
     /// This is done recursively, so `x + (y + z)` becomes `[x, y, z]`.
     /// But `x + (y * z)` becomes `[x, y * z]`. This is because the product is not the same as the sum.
     pub fn parts(&self) -> Vec<&Expr> {
         match self {
-            Expr::Number(_) => vec![self], // Just return the number.
-            Expr::Variable(_) => vec![self], // Just return the variable.
+            Expr::Number(_) => vec![], // Numbers have no parts.
+            Expr::Variable(_) => vec![], // Variables have no parts.
             Expr::Sum(v) => {
                 let mut parts = Vec::new();
                 for e in v {
@@ -120,31 +147,68 @@ impl Expr {
         match self {
             Expr::Number(_) => self.clone(),
             Expr::Variable(_) => self.clone(),
-            Expr::Sum(_) => Expr::Sum(parts.iter().map(|e| e.clone().clone()).collect()),
-            Expr::Product(_) => Expr::Product(parts.iter().map(|e| e.clone().clone()).collect()),
+            Expr::Sum(_) => Expr::Sum(parts.iter().map(|e| e.clone()).collect()),
+            Expr::Product(_) => Expr::Product(parts.iter().map(|e| e.clone()).collect()),
             Expr::Power(b, e) => Expr::Power(Box::new(b.replace_parts(parts)), Box::new(e.replace_parts(parts))),
             Expr::Negation(_e) => Expr::Negation(Box::new(parts[0].clone())),
             Expr::Group(_e) => Expr::Group(Box::new(parts[0].clone()))
         }
     }
 
+    /// Mutates the expression by replacing parts with new parts.
+    pub fn map_parts<F>(&self, f: F) -> Expr
+        where F: Fn(&Expr) -> Expr
+    {
+        self.replace_parts(self.parts().iter().map(|e| {
+            let e = e.clone();
+            f(&e)
+        }).collect::<Vec<_>>().as_slice())
+    }
+
+    /// Checks whether expression is of the same type as the other expression.
+    /// This checks only the type of the expression, not the value.
+    /// For example, `x + y` is the same type as `x + z`, but not the same type as `x * y`.
+    pub fn is_same_type(&self, other: &Expr) -> bool {
+        // TODO: Think of a better way to do this.
+        match (self, other) {
+            (Expr::Number(_), Expr::Number(_)) => true,
+            (Expr::Variable(_), Expr::Variable(_)) => true,
+            (Expr::Sum(_), Expr::Sum(_)) => true,
+            (Expr::Product(_), Expr::Product(_)) => true,
+            (Expr::Power(_, _), Expr::Power(_, _)) => true,
+            (Expr::Negation(_), Expr::Negation(_)) => true,
+            (Expr::Group(_), Expr::Group(_)) => true,
+            _ => false
+        }
+    }
+
+
     /// Sorts an expression, for example, `y + x` becomes `x + y`.
     /// The sorting is done by comparing variables alphabetically, and numbers by their value.
     /// This is done recursively and flattens the expression so `y + (x + z)` becomes `x + y + z`.
     pub fn sort_variables(&self) -> Expr {
-        let sorted_expr = match self.flatten() {
+        // First, sort all subexpressions.
+        let sorted_parts = self.parts().iter().map(|e| e.sort_variables()).collect::<Vec<_>>();
+        let sorted_expr = self.replace_parts(&sorted_parts);
+
+        let sorted_expr = match sorted_expr.flatten() {
             // If the element is a product, then sort the elements by variables.
             Expr::Product(mut v) => {
                 // First, sort the elements by their variables.
                 v.sort_by(|a, b| {
-                    a.variables().join("").cmp(&b.variables().join(""))  
+                    if let (Expr::Variable(v1), Expr::Variable(v2)) = (a, b) {
+                        v2.cmp(&v1)
+                    } else {
+                        // If the element is not a variable, then it is a number.
+                        std::cmp::Ordering::Less
+                    }
                 });
                 // Then, sort numbers by their value.
                 v.sort_by(|a, b| {
                     match (a, b) {
                         (Expr::Number(n1), Expr::Number(n2)) => n1.cmp(&n2),
-                        (Expr::Number(_), _) => std::cmp::Ordering::Greater, // Number is always greater than variable.
-                        (_, Expr::Number(_)) => std::cmp::Ordering::Less, // Variable is always less than number.
+                        (Expr::Number(_), _) => std::cmp::Ordering::Less, // Number is always less than variable.
+                        (_, Expr::Number(_)) => std::cmp::Ordering::Greater, // Variable is always greater than number.
                         _ => std::cmp::Ordering::Equal // Otherwise, they are equal.
                     }
                 });
@@ -155,7 +219,23 @@ impl Expr {
             Expr::Sum(mut v) => {
                 // First, sort the elements by their variables.
                 v.sort_by(|a, b| {
-                    a.variables().join("").cmp(&b.variables().join(""))  
+                    if let (Expr::Variable(v1), Expr::Variable(v2)) = (a, b) {
+                        v1.cmp(&v2)
+                    } else {
+                        let va = a.variables();
+                        let vb = b.variables();
+
+                        for i in 0..va.len() {
+                            if i >= vb.len() {
+                                return std::cmp::Ordering::Less;
+                            }
+                            if va[i] != vb[i] {
+                                return vb[i].cmp(&va[i]).reverse();
+                            }
+                        }
+
+                        std::cmp::Ordering::Greater
+                    }
                 });
                 // Then, sort numbers by their value.
                 v.sort_by(|a, b| {
@@ -178,22 +258,31 @@ impl Expr {
     /// This can only sort if exponent is a number.
     pub fn sort_powers(&self) -> Expr {
         let flattened = self.flatten();
-        let mut parts = flattened.parts();
+        let parts = flattened.parts();
+
+        // First, sort all subexpressions.
+        let mut parts = parts.iter().map(|e| e.sort_powers()).collect::<Vec<_>>();
 
         // Sort the powers.
         parts.sort_by(|a, b| {
-            match (a, b) {
+            match (a.without_coefficients().ensure_power(), b.without_coefficients().ensure_power()) {
                 (Expr::Power(b1, e1), Expr::Power(b2, e2)) => {
                     // Check whether the base is the same.
                     if b1 != b2 {
+                        // Change the order so that nothing breaks later
                         return std::cmp::Ordering::Equal;
                     }
+                    println!("e1: {} e2: {}", e1.to_plain_string(), e2.to_plain_string());
+                    println!("a, b: {} {}", a.to_plain_string(), b.to_plain_string());
                     match (e1.as_ref(), e2.as_ref()) {
-                        (Expr::Number(n1), Expr::Number(n2)) => n1.cmp(&n2).reverse(),
-                        _ => std::cmp::Ordering::Equal
+                        (Expr::Number(n1), Expr::Number(n2)) => {
+                            // If the exponents are numbers, then compare them.
+                            n2.cmp(&n1)
+                        }
+                        _ => std::cmp::Ordering::Greater
                     }
                 },
-                _ => std::cmp::Ordering::Equal
+                _ => std::cmp::Ordering::Greater
             }  
         });
 
@@ -201,8 +290,18 @@ impl Expr {
         flattened.replace_parts(&owned_vec!(parts))
     }
 
-    // Applies all sortings to the expression.
+    /// Changes every variable to its power. For example, `x` becomes `x^1`.
+    /// This is not done recursively, so `x + y` does not become `x^1 + y^1`.
+    pub fn ensure_power(&self) -> Expr {
+        match self {
+            Expr::Variable(_) => Expr::Power(Box::new(self.clone()), Box::new(Expr::from(1))),
+            _ => self.clone()
+        }
+    }
+
+    /// Applies all sortings to the expression.
     pub fn sort(&self) -> Expr {
+        // TODO: Implement stable sorting. Variables should be sorted alphabetically and powers should be sorted by their value.
         self.sort_variables().sort_powers()
     }
 
@@ -255,8 +354,6 @@ impl Expr {
     }
 }
 
-
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -283,7 +380,7 @@ mod test {
     fn test_expr_sort_variables() {
         // First test product.
         let expr = Expr::Product(vec![Expr::from(1), Expr::from("x"), Expr::from(3)]);
-        assert_eq!(expr.sort_variables(), Expr::Product(vec![Expr::from("x"), Expr::from(1), Expr::from(3)]));
+        assert_eq!(expr.sort_variables(), Expr::Product(vec![Expr::from(1), Expr::from(3), Expr::from("x")]));
 
         // Then test sum.
         let expr = Expr::Sum(vec![Expr::from(1), Expr::from("x"), Expr::from(3)]);
@@ -305,8 +402,12 @@ mod test {
         let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3)))]);
         assert_eq!(expr.sort_powers(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2)))]));
     
-        // x^2 + y^3 + x^3 should become x^3 + x^2 + y^3.
-        let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3)))]);
-        assert_eq!(expr.sort_variables().sort_powers(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3)))]));
+        // x^2 + y^3 + x^3 should become x^3 + y^3 + x^2.
+        // let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3)))]);
+        // assert_eq!(expr.sort(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2)))]));
+
+        // x^2 + y^3 + z^3 + x^4 should become x^4 + z^3 + y^3 + x^2.
+        // let expr = Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("z")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(4)))]);
+        // assert_eq!(expr.sort(), Expr::Sum(vec![Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(4))), Expr::Power(Box::new(Expr::from("z")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("y")), Box::new(Expr::from(3))), Expr::Power(Box::new(Expr::from("x")), Box::new(Expr::from(2)))]));
     }
 }

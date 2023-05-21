@@ -5,7 +5,7 @@ This crate provides a symbolic math library for Rust. It is designed in accordan
 ## Features
 
 -   [x] Combining like terms
--   [ ] Removal of redundant terms
+-   [x] Removal of redundant terms
 -   [ ] Simplification of expressions
 -   [ ] Substitution of variables
 -   [ ] Evaluation of expressions
@@ -17,3 +17,9 @@ This crate provides a symbolic math library for Rust. It is designed in accordan
 -   [ ] Trigonometric expansion
 -   [ ] Trigonometric differentiation
 -   [ ] Custom functions and constants
+-   [ ] Parsing from string
+-   [ ] Parsing as a macro
+
+## TODO :scroll:
+
+-   Fix sorting of terms
